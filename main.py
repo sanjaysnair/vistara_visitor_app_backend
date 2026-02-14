@@ -111,11 +111,16 @@ def send_email_notification(visitor_data: dict, photo_base64: str, flat_owner_em
         msg['From'] = SMTP_USERNAME
         msg['Subject'] = f"🏢 New Visitor Check-In - {visitor_data['name']}"
         
-        # Determine recipients
-        recipients = [ADMIN_EMAIL]
-        if flat_owner_email:
-            recipients.append(flat_owner_email)
-        msg['To'] = ', '.join(recipients)
+        # MainRecipient is prominentvistararwa@gmail.com (or flat owner if provided)
+        main_recipient = flat_owner_email if flat_owner_email else "prominentvistararwa@gmail.com"
+        msg['To'] = main_recipient
+        
+        # BCC the admin email (getsanjaysnair@gmail.com)
+        bcc_recipients = [ADMIN_EMAIL]
+        msg['Bcc'] = ', '.join(bcc_recipients)
+        
+        # All recipients for sending (including BCC)
+        all_recipients = [main_recipient] + bcc_recipients
         
         # Create HTML email body
         html_body = f"""
@@ -259,9 +264,9 @@ def send_email_notification(visitor_data: dict, photo_base64: str, flat_owner_em
             logger.info(f"TLS started, attempting login with username: {SMTP_USERNAME}")
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             logger.info("Login successful, sending message...")
-            server.send_message(msg)
+            server.send_message(msg, to_addrs=all_recipients)
         
-        logger.info(f"Email sent successfully to {recipients}")
+        logger.info(f"Email sent to: {main_recipient}, BCC: {', '.join(bcc_recipients)}")
         return True
         
     except Exception as e:
