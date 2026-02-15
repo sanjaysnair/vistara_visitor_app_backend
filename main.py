@@ -8,10 +8,7 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 import os
 from dotenv import load_dotenv
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.image import MIMEImage
+import resend
 import base64
 from fastapi import Depends
 import logging
@@ -85,42 +82,43 @@ def get_db():
     finally:
         db.close()
 
-# Email configuration
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USERNAME = os.getenv("SMTP_USERNAME")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
+# Email configuration with Resend
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+FROM_EMAIL = os.getenv("FROM_EMAIL", "onboarding@resend.dev")  # Replace with your verified domain
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "getsanjaysnair@gmail.com")
 
-# Debug: Log the credentials being used (masking password)
-logger.info(f"Email Configuration:")
-logger.info(f"  SMTP_SERVER: {SMTP_SERVER}")
-logger.info(f"  SMTP_PORT: {SMTP_PORT}")
-logger.info(f"  SMTP_USERNAME: {SMTP_USERNAME}")
-logger.info(f"  SMTP_PASSWORD length: {len(SMTP_PASSWORD) if SMTP_PASSWORD else 0}")
-logger.info(f"  SMTP_PASSWORD: {'*' * len(SMTP_PASSWORD) if SMTP_PASSWORD else 'NOT SET'}")
-logger.info(f"  ADMIN_EMAIL: {ADMIN_EMAIL}")
+# Configure Resend
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
+    logger.info(f"Email Configuration: Resend API configured with FROM_EMAIL={FROM_EMAIL}")
+else:
+    logger.warning("RESEND_API_KEY not set - email notifications will fail")
 
 def send_email_notification(visitor_data: dict, photo_base64: str, flat_owner_email: Optional[str] = None):
-    """Send email notification to admin and flat owner"""
+    """Send email notification to admin and flat owner using Resend"""
     try:
-        logger.info(f"Attempting to send email with credentials: {SMTP_USERNAME} / {'*' * len(SMTP_PASSWORD) if SMTP_PASSWORD else 'NONE'}")
+        if not RESEND_API_KEY:
+            logger.error("RESEND_API_KEY not configured")
+            return False
+            
+        # Main recipients: prominentvistararwa@gmail.com + flat owner email (if provided)
+        recipients = ["prominentvistararwa@gmail.com"]
+        if flat_owner_email and flat_owner_email != "prominentvistararwa@gmail.com":
+            recipients.append(flat_owner_email)
         
-        # Create message
-        msg = MIMEMultipart('related')
-        msg['From'] = SMTP_USERNAME
-        msg['Subject'] = f"🏢 New Visitor Check-In - {visitor_data['name']}"
+        # BCC: Admin email only
+        bcc_recipients = []
+        if ADMIN_EMAIL and ADMIN_EMAIL not in recipients:
+            bcc_recipients.append(ADMIN_EMAIL)
         
-        # MainRecipient is prominentvistararwa@gmail.com (or flat owner if provided)
-        main_recipient = flat_owner_email if flat_owner_email else "prominentvistararwa@gmail.com"
-        msg['To'] = main_recipient
-        
-        # BCC the admin email (getsanjaysnair@gmail.com)
-        bcc_recipients = [ADMIN_EMAIL]
-        msg['Bcc'] = ', '.join(bcc_recipients)
-        
-        # All recipients for sending (including BCC)
-        all_recipients = [main_recipient] + bcc_recipients
+        # Prepare photo data URI for HTML embedding
+        photo_data_uri = ""
+        if photo_base64:
+            # Remove data URI prefix if present
+            if ',' in photo_base64:
+                photo_data_uri = photo_base64  # Already has data:image prefix
+            else:
+                photo_data_uri = f"data:image/jpeg;base64,{photo_base64}"
         
         # Create HTML email body
         html_body = f"""
@@ -227,7 +225,7 @@ def send_email_notification(visitor_data: dict, photo_base64: str, flat_owner_em
                 
                 <h3 style="color: #667eea;">📸 Visitor Photo</h3>
                 <div class="photo-container">
-                    <img src="cid:visitor_photo" alt="Visitor Photo">
+                    <img src="{photo_data_uri}" alt="Visitor Photo">
                 </div>
             </div>
             
@@ -240,38 +238,28 @@ def send_email_notification(visitor_data: dict, photo_base64: str, flat_owner_em
         </html>
         """
         
-        msg_alternative = MIMEMultipart('alternative')
-        msg.attach(msg_alternative)
+        # Send email via Resend API
+        logger.info(f"Sending email via Resend to: {', '.join(recipients)}, BCC: {', '.join(bcc_recipients)}")
         
-        msg_alternative.attach(MIMEText(html_body, 'html'))
+        params = {
+            "from": FROM_EMAIL,
+            "to": recipients,
+            "subject": f"🏢 New Visitor Check-In - {visitor_data['name']}",
+            "html": html_body,
+        }
         
-        # Attach photo
-        if photo_base64:
-            # Remove data URI prefix if present
-            if ',' in photo_base64:
-                photo_base64 = photo_base64.split(',')[1]
-            
-            photo_data = base64.b64decode(photo_base64)
-            image = MIMEImage(photo_data)
-            image.add_header('Content-ID', '<visitor_photo>')
-            msg.attach(image)
+        # Add BCC if present
+        if bcc_recipients:
+            params["bcc"] = bcc_recipients
         
-        # Send email
-        logger.info(f"Connecting to SMTP server: {SMTP_SERVER}:{SMTP_PORT}")
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            logger.info("Connected to SMTP server, starting TLS...")
-            server.starttls()
-            logger.info(f"TLS started, attempting login with username: {SMTP_USERNAME}")
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            logger.info("Login successful, sending message...")
-            server.send_message(msg, to_addrs=all_recipients)
-        
-        logger.info(f"Email sent to: {main_recipient}, BCC: {', '.join(bcc_recipients)}")
+        response = resend.Emails.send(params)
+        logger.info(f"Email sent successfully via Resend. Response: {response}")
         return True
         
     except Exception as e:
         logger.error(f"Failed to send email: {str(e)}")
-        raise
+        logger.error(f"Email sending failed: {str(e)}")
+        return False
 
 # API Endpoints
 @app.get("/")
