@@ -100,16 +100,29 @@ def send_email_notification(visitor_data: dict, photo_base64: str, flat_owner_em
         if not RESEND_API_KEY:
             logger.error("RESEND_API_KEY not configured")
             return False
-            
-        # Main recipients: prominentvistararwa@gmail.com + flat owner email (if provided)
-        recipients = ["prominentvistararwa@gmail.com"]
-        if flat_owner_email and flat_owner_email != "prominentvistararwa@gmail.com":
-            recipients.append(flat_owner_email)
         
-        # BCC: Admin email only
-        bcc_recipients = []
-        if ADMIN_EMAIL and ADMIN_EMAIL not in recipients:
-            bcc_recipients.append(ADMIN_EMAIL)
+        # Using test FROM_EMAIL? Only send to admin (Resend limitation)
+        is_test_email = FROM_EMAIL == "onboarding@resend.dev"
+        
+        if is_test_email:
+            # Test mode: only send to admin with note about intended recipients
+            recipients = [ADMIN_EMAIL]
+            bcc_recipients = []
+            
+            # Add note in email about intended recipients
+            intended_recipients = ["prominentvistararwa@gmail.com"]
+            if flat_owner_email:
+                intended_recipients.append(flat_owner_email)
+            recipient_note = f"<p style='background:#fff3cd;padding:10px;border-left:4px solid #ffc107;margin-bottom:20px;'><strong>⚠️ Test Mode:</strong> This email would normally be sent to: {', '.join(intended_recipients)}</p>"
+        else:
+            # Production mode: send to prominentvistararwa + flat owner, BCC to admin
+            recipients = ["prominentvistararwa@gmail.com"]
+            if flat_owner_email and flat_owner_email not in recipients and flat_owner_email != ADMIN_EMAIL:
+                recipients.append(flat_owner_email)
+            
+            # BCC: Admin email only (never in main recipients)
+            bcc_recipients = [ADMIN_EMAIL] if ADMIN_EMAIL else []
+            recipient_note = ""
         
         # Prepare photo data URI for HTML embedding
         photo_data_uri = ""
@@ -201,6 +214,7 @@ def send_email_notification(visitor_data: dict, photo_base64: str, flat_owner_em
             </div>
             
             <div class="content">
+                {recipient_note}
                 <div class="alert-badge">NEW VISITOR</div>
                 <h2 style="color: #667eea; margin-top: 0;">Visitor Details</h2>
                 
